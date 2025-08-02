@@ -16,7 +16,7 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 # Gemini Setup
 genai.configure(api_key="AIzaSyDdGv--2i0pMbhH68heurl-LI1qJPJjzD4")
-model = genai.GenerativeModel(model_name="gemini-2.5-pro")
+model = genai.GenerativeModel(model_name="gemini-2.5-flash")
 
 # Helpers
 def reduce_noise(audio, sr, cutoff):
@@ -81,7 +81,7 @@ def edit_and_show_waveform(path, label):
     if audio.ndim > 1:
         audio = audio[:, 0]
 
-    st.markdown(f"#### {label} Valve")
+    st.markdown(f"### {label} Valve")
 
     a1, a2, a3 = st.columns(3)
     amp = a1.slider(f"{label} Amplitude", 0.1, 5.0, 1.0, key=f"amp{label}")
@@ -99,27 +99,38 @@ def edit_and_show_waveform(path, label):
         st.audio(io.BytesIO(wav_to_bytes(filt, sr)))
         show_waveform(filt, sr, f"{label} Edited", color='red')
 
-    st.write("##### 🧠 Real-time AI Diagnosis from Waveform")
+    st.write("#### 🧠 Real-time AI Diagnosis from Waveform")
     ai_img = diagnose_with_gemini_text_from_audio(filt, sr, label)
     st.success(ai_img)
 
 # UI
-st.set_page_config(page_title="Real-time Valve Diagnosis", layout="centered")
-st.title("🎧 Real-time Heart Valve Diagnosis using pcg ")
-st.markdown("Upload `.wav` files and let AI help analyze waveform patterns for valve disorders.")
+st.set_page_config(page_title="Real-time Valve Diagnosis", layout="wide")
+st.title("🎷 Real-time Heart Valve Diagnosis using .WAV + AI")
+st.markdown("Upload `.wav` files for each heart valve. The AI will analyze waveform patterns for diagnosis.")
 
-valve_label = st.selectbox("Select Heart Valve", ["Aortic", "Mitral", "Pulmonary", "Tricuspid"])
-uploaded_file = st.file_uploader("Upload .wav file", type=["wav"])
+valves = ["Aortic", "Mitral", "Pulmonary", "Tricuspid"]
+uploaded_files = {}
 
-if uploaded_file:
-    now = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"{valve_label}_{now}.wav"
-    filepath = os.path.join(UPLOAD_FOLDER, filename)
-    with open(filepath, "wb") as f:
-        f.write(uploaded_file.read())
+# Upload section in grid format
+cols = st.columns(4)
+for i, valve in enumerate(valves):
+    with cols[i]:
+        uploaded_files[valve] = st.file_uploader(f"Upload {valve} Valve .wav", type=["wav"], key=f"upload{valve}")
 
-    st.success("File uploaded successfully!")
-    edit_and_show_waveform(filepath, valve_label)
+st.markdown("---")
+
+# Diagnosis section
+for valve in valves:
+    file = uploaded_files[valve]
+    if file:
+        now = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"{valve}_{now}.wav"
+        filepath = os.path.join(UPLOAD_FOLDER, filename)
+        with open(filepath, "wb") as f:
+            f.write(file.read())
+
+        edit_and_show_waveform(filepath, valve)
+        st.markdown("---")
 
 # Button Styling
 st.markdown("""
@@ -129,3 +140,4 @@ st.markdown("""
         }
     </style>
 """, unsafe_allow_html=True)
+        
