@@ -51,7 +51,7 @@ def diagnose_with_waveform_image(audio, sr, valve):
                     "data": base64.b64encode(open(image_path, "rb").read()).decode()
                 }
             },
-            [
+        ]
                 "text": f"""{{ 
   "valve": "{valve}",
   "condition": "Your diagnosis",
