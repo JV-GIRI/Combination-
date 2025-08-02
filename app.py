@@ -52,7 +52,7 @@ def diagnose_with_waveform_image(audio, sr, valve):
                 }
             },
             {
-                "text": f"This is a phonocardiogram waveform image for the {valve} valve. Analyze the waveform and diagnose the likely heart condition. Return only in structured concise format:
+                "text": f"""This is a phonocardiogram waveform image for the {valve} valve. Analyze the waveform and diagnose the likely heart condition. Return only in structured concise format:"""
                 - Diagnosis:
                 - Pathology:
                 - Murmur Type:
