@@ -7,6 +7,7 @@ from scipy.signal import butter, lfilter
 from datetime import datetime
 import json
 import io
+import base64
 from twilio.rest import Client
 import google.generativeai as genai
 from PIL import Image
@@ -28,7 +29,6 @@ model = genai.GenerativeModel(model_name="gemini-2.5-flash")
 # Audio processing helpers: unchanged
 
 # Generate waveform image and diagnose with Gemini
-
 def diagnose_with_waveform_image(audio, sr, valve):
     try:
         # Plot waveform and save to temp file
@@ -43,30 +43,32 @@ def diagnose_with_waveform_image(audio, sr, valve):
             image_path = tmp.name
 
         # Load image and send to Gemini
-        image = Image.open(image_path)
+        with open(image_path, "rb") as img_file:
+            image_data = base64.b64encode(img_file.read()).decode()
+
         gemini_response = model.generate_content([
-    {
-        "inline_data": {
-            "mime_type": "image/png",
-            "data": base64.b64encode(open(image_path, "rb").read()).decode()
-        }
-    },
-]
-        "text": f"""...
-                "text": f"""{{ 
+            {
+                "inline_data": {
+                    "mime_type": "image/png",
+                    "data": image_data
+                }
+            },
+            {
+                "text": f"""{{
   "valve": "{valve}",
   "condition": "Your diagnosis",
   "severity": "Mild/Moderate/Severe",
   "justification": "Brief explanation of waveform features"
 }}"""
+            }
         ])
+
         return gemini_response.text.strip()
 
     except Exception as e:
         return f"Gemini image analysis error: {e}"
 
 # Edit and show waveform + AI integration
-
 def edit_and_show_waveform(path, label):
     sr, audio = wav.read(path)
     if audio.ndim > 1:
@@ -99,7 +101,7 @@ def edit_and_show_waveform(path, label):
     st.write("##### 🧠 AI Diagnosis (Waveform Image)")
     st.success(ai_img)
 
-# Streamlit UI, sidebar, saving data, SMS, and history: all unchanged from your code
+# Streamlit UI, sidebar, saving data, SMS, and history: unchanged from your code
 
 # Button styling
 st.markdown("""
