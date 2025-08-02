@@ -104,10 +104,6 @@ def edit_and_show_waveform(path, label):
 # Button styling
 st.markdown("""
     <style>
-        body {
-            background-color: #f0f2f6;
-            font-family: 'Segoe UI', sans-serif;
-        }
         .main {
             padding: 20px;
         }
