@@ -103,6 +103,13 @@ def edit_and_show_waveform(path, label):
 
 # Button styling
 st.markdown("""
-<style>
-div.stButton > button:first-child {background-color:#006400; color:white;}
-</style>""", unsafe_allow_html=True)
+    <style>
+        body {
+            background-color: #f0f2f6;
+            font-family: 'Segoe UI', sans-serif;
+        }
+        .main {
+            padding: 20px;
+        }
+    </style>
+""", unsafe_allow_html=True)
