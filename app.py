@@ -1,112 +1,177 @@
 import streamlit as st
 import numpy as np
-import librosa
 import matplotlib.pyplot as plt
+import os
+import scipy.io.wavfile as wav
+from scipy.signal import butter, lfilter
+from datetime import datetime
+import json
 import io
 import base64
-import requests
-from scipy.signal import butter, lfilter
-from pydub import AudioSegment
-from tempfile import NamedTemporaryFile
+from twilio.rest import Client
+import google.generativeai as genai
+from PIL import Image
+import tempfile
 
-# ======================== CONFIG ========================
-st.set_page_config(page_title="Real-Time PCG AI Diagnosis", layout="wide")
-st.title("🔬 Real-Time Heart Sound Diagnosis (PCG + Gemini)")
-
-# ================== HELPER FUNCTIONS ====================
-def butter_bandpass(lowcut, highcut, fs, order=5):
-    nyq = 0.5 * fs
-    low = lowcut / nyq
-    high = highcut / nyq
-    b, a = butter(order, [low, high], btype='band')
-    return b, a
-
-def bandpass_filter(data, lowcut=25.0, highcut=400.0, fs=1000.0, order=4):
-    b, a = butter_bandpass(lowcut, highcut, fs, order=order)
-    y = lfilter(b, a, data)
-    return y
-
-def generate_waveform_plot(y, sr):
-    fig, ax = plt.subplots(figsize=(10, 3))
-    ax.plot(np.linspace(0, len(y)/sr, len(y)), y)
-    ax.set_xlabel("Time (s)")
-    ax.set_ylabel("Amplitude")
-    ax.set_title("Phonocardiogram Waveform")
-    ax.grid(True)
-    buf = io.BytesIO()
-    plt.tight_layout()
-    plt.savefig(buf, format='png')
-    plt.close(fig)
-    buf.seek(0)
-    return base64.b64encode(buf.getvalue()).decode()
-
-def convert_audio(file):
-    audio = AudioSegment.from_file(file)
-    with NamedTemporaryFile(delete=False, suffix=".wav") as f:
-        audio.export(f.name, format="wav")
-        return f.name
-
-def call_gemini_diagnosis(base64_waveform_img, valve="Mitral"):
-    # Sample Gemini prompt
-    prompt = {
-        "contents": [{
-            "role": "user",
-            "parts": [
-                {
-                    "text": f"This is a phonocardiogram waveform image for the {valve} valve. Analyze the waveform and diagnose the likely heart condition. Return only in structured concise format:\n\n- Valve:\n- Condition:\n- Confidence Score (%):\n- Justification:\n- Recommendation:"
-                },
-                {
-                    "inline_data": {
-                        "mime_type": "image/png",
-                        "data": base64_waveform_img
-                    }
-                }
-            ]
-        }]
+# Configuration
+UPLOAD_FOLDER = "uploaded_audios"
+PATIENT_DATA = "patient_data.json"
+SIMULATED_DIAGNOSES = {
+    "Aortic": {
+        "normal": "Normal aortic valve sounds. Crisp S1 and S2, no murmurs detected.",
+        "abnormal": "Aortic stenosis suspected due to crescendo-decrescendo systolic murmur."
+    },
+    "Mitral": {
+        "normal": "Normal mitral valve sounds. No opening snap or murmur.",
+        "abnormal": "Mitral regurgitation likely — pansystolic murmur detected."
+    },
+    "Pulmonary": {
+        "normal": "Pulmonary valve normal. No murmur or abnormal split.",
+        "abnormal": "Pulmonary stenosis or hypertension indicators found."
+    },
+    "Tricuspid": {
+        "normal": "Tricuspid valve shows regular S1/S2, no added sounds.",
+        "abnormal": "Tricuspid regurgitation likely — systolic murmur heard at LLSB."
     }
+}
 
-    # Replace this with actual Gemini API call
-    headers = {
-        "Authorization": f"Bearer YOUR_GEMINI_API_KEY",
-        "Content-Type": "application/json"
-    }
-    endpoint = "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro-vision:generateContent"
-    response = requests.post(endpoint, headers=headers, json=prompt)
-    result = response.json()
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-    if 'candidates' in result:
-        return result['candidates'][0]['content']['parts'][0]['text']
+# Gemini Setup
+genai.configure(api_key="AIzaSyDdGv--2i0pMbhH68heurl-LI1qJPJjzD4")
+model = genai.GenerativeModel(model_name="gemini-2.5-flash")
+
+# Helpers
+def reduce_noise(audio, sr, cutoff):
+    nyq = 0.5 * sr
+    normal_cutoff = cutoff / nyq
+    b, a = butter(2, normal_cutoff, btype='low', analog=False)
+    return lfilter(b, a, audio)
+
+def wav_to_bytes(audio_array, sr):
+    virtual_file = io.BytesIO()
+    wav.write(virtual_file, sr, np.int16(audio_array))
+    virtual_file.seek(0)
+    return virtual_file.read()
+
+def get_simulated_diagnosis(audio, sr, valve):
+    energy = np.sum(audio ** 2)
+    if energy > 1000:
+        return SIMULATED_DIAGNOSES[valve]["abnormal"]
     else:
-        return "Unable to diagnose. Please try again."
+        return SIMULATED_DIAGNOSES[valve]["normal"]
 
-# ================== UPLOAD SECTION =====================
-st.subheader("📥 Upload Your Heart Sound (PCG) File")
-uploaded_file = st.file_uploader("Upload WAV/MP3/OGG file", type=["wav", "mp3", "ogg"])
+def diagnose_with_gemini_text_only(text, valve):
+    prompt = f"""
+Analyze the following simulated diagnosis for the {valve} valve and suggest if further clinical evaluation is required:
+
+{text}
+    """
+    try:
+        response = model.generate_content(prompt)
+        return response.text.strip()
+    except Exception as e:
+        return f"Gemini error: {e}"
+
+def diagnose_with_waveform_image(audio, sr, valve):
+    try:
+        t = np.linspace(0, len(audio) / sr, len(audio))
+        fig, ax = plt.subplots()
+        ax.plot(t, audio)
+        ax.set(title=f"Waveform – {valve}", xlabel="Time (s)", ylabel="Amplitude")
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
+            plt.savefig(tmp.name)
+            plt.close(fig)
+            image_path = tmp.name
+
+        with open(image_path, "rb") as img_file:
+            image_data = base64.b64encode(img_file.read()).decode()
+
+        gemini_response = model.generate_content([
+            {
+                "inline_data": {
+                    "mime_type": "image/png",
+                    "data": image_data
+                }
+            },
+            {
+                "text": f"""{{
+  "valve": "{valve}",
+  "condition": "Your diagnosis",
+  "severity": "Mild/Moderate/Severe",
+  "justification": "Brief explanation of waveform features"
+}}"""
+            }
+        ])
+
+        return gemini_response.text.strip()
+    except Exception as e:
+        return f"Gemini image analysis error: {e}"
+
+def show_waveform(audio, sr, label, color='blue'):
+    t = np.linspace(0, len(audio) / sr, len(audio))
+    fig, ax = plt.subplots()
+    ax.plot(t, audio, color=color)
+    ax.set(title=f"{label} Waveform", xlabel="Time (s)", ylabel="Amplitude")
+    st.pyplot(fig)
+
+def edit_and_show_waveform(path, label):
+    sr, audio = wav.read(path)
+    if audio.ndim > 1:
+        audio = audio[:, 0]
+    st.markdown(f"#### {label} Valve")
+
+    a1, a2, a3 = st.columns(3)
+    amp = a1.slider(f"{label} Amplitude", 0.1, 5.0, 1.0, key=f"amp{label}")
+    dur = a2.slider(f"{label} Duration (s)", 1, int(len(audio) / sr), 5, key=f"dur{label}")
+    cutoff = a3.slider(f"{label} Noise Cutoff", 0.01, 0.5, 0.05, 0.01, key=f"noise{label}")
+
+    adj = audio[:dur * sr] * amp
+    filt = reduce_noise(adj, sr, cutoff)
+
+    c1, c2 = st.columns(2)
+    with c1:
+        st.audio(path)
+        show_waveform(audio, sr, f"{label} Original")
+    with c2:
+        st.audio(io.BytesIO(wav_to_bytes(filt, sr)))
+        show_waveform(filt, sr, f"{label} Edited", color='red')
+
+    sim = get_simulated_diagnosis(filt, sr, label)
+    st.write("##### 🤖 Simulated Report")
+    st.write(sim)
+
+    ai_text = diagnose_with_gemini_text_only(sim, label)
+    st.write("##### 🧠 AI Diagnosis (Text)")
+    st.success(ai_text)
+
+    ai_img = diagnose_with_waveform_image(filt, sr, label)
+    st.write("##### 🧠 AI Diagnosis (Waveform Image)")
+    st.success(ai_img)
+
+# UI
+st.set_page_config(page_title="Real-time Valve Diagnosis", layout="centered")
+st.title("🎧 Real-time Heart Valve Diagnosis using .WAV + AI")
+st.markdown("Upload `.wav` files and let AI help analyze waveform patterns for valve disorders.")
+
+valve_label = st.selectbox("Select Heart Valve", ["Aortic", "Mitral", "Pulmonary", "Tricuspid"])
+uploaded_file = st.file_uploader("Upload .wav file", type=["wav"])
 
 if uploaded_file:
-    with st.spinner("Processing and diagnosing..."):
-        audio_path = convert_audio(uploaded_file)
-        y, sr = librosa.load(audio_path, sr=1000)
-        y_filtered = bandpass_filter(y, fs=sr)
+    now = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"{valve_label}_{now}.wav"
+    filepath = os.path.join(UPLOAD_FOLDER, filename)
+    with open(filepath, "wb") as f:
+        f.write(uploaded_file.read())
 
-        # Show waveform
-        img_b64 = generate_waveform_plot(y_filtered, sr)
-        st.image(f"data:image/png;base64,{img_b64}", use_column_width=True)
+    st.success("File uploaded successfully!")
+    edit_and_show_waveform(filepath, valve_label)
 
-        # Diagnosis using Gemini
-        diagnosis = call_gemini_diagnosis(img_b64)
-
-        st.markdown("### 📋 Diagnosis Result")
-        st.code(diagnosis, language='markdown')
-
-        st.download_button("💾 Download Diagnosis Report", diagnosis, file_name="diagnosis.txt")
-
-# ================== FOOTER STYLING =====================
+# Button Styling
 st.markdown("""
-<style>
-footer {visibility: hidden;}
-section.main > div:has(~ footer) {
-    padding-bottom: 0rem;
-}
-</style>
+    <style>
+        .main {
+            padding: 20px;
+        }
+    </style>
 """, unsafe_allow_html=True)
