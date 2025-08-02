@@ -105,7 +105,7 @@ def edit_and_show_waveform(path, label):
 
 # UI
 st.set_page_config(page_title="Real-time Valve Diagnosis", layout="centered")
-st.title("🎧 Real-time Heart Valve Diagnosis using .WAV + AI")
+st.title("🎧 Real-time Heart Valve Diagnosis using pcg ")
 st.markdown("Upload `.wav` files and let AI help analyze waveform patterns for valve disorders.")
 
 valve_label = st.selectbox("Select Heart Valve", ["Aortic", "Mitral", "Pulmonary", "Tricuspid"])
