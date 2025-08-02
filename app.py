@@ -5,41 +5,18 @@ import os
 import scipy.io.wavfile as wav
 from scipy.signal import butter, lfilter
 from datetime import datetime
-import json
 import io
 import base64
-from twilio.rest import Client
-import google.generativeai as genai
-from PIL import Image
 import tempfile
+import google.generativeai as genai
 
 # Configuration
 UPLOAD_FOLDER = "uploaded_audios"
-PATIENT_DATA = "patient_data.json"
-SIMULATED_DIAGNOSES = {
-    "Aortic": {
-        "normal": "Normal aortic valve sounds. Crisp S1 and S2, no murmurs detected.",
-        "abnormal": "Aortic stenosis suspected due to crescendo-decrescendo systolic murmur."
-    },
-    "Mitral": {
-        "normal": "Normal mitral valve sounds. No opening snap or murmur.",
-        "abnormal": "Mitral regurgitation likely — pansystolic murmur detected."
-    },
-    "Pulmonary": {
-        "normal": "Pulmonary valve normal. No murmur or abnormal split.",
-        "abnormal": "Pulmonary stenosis or hypertension indicators found."
-    },
-    "Tricuspid": {
-        "normal": "Tricuspid valve shows regular S1/S2, no added sounds.",
-        "abnormal": "Tricuspid regurgitation likely — systolic murmur heard at LLSB."
-    }
-}
-
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 # Gemini Setup
 genai.configure(api_key="AIzaSyDdGv--2i0pMbhH68heurl-LI1qJPJjzD4")
-model = genai.GenerativeModel(model_name="gemini-2.5-flash")
+model = genai.GenerativeModel(model_name="gemini-2.5-pro")
 
 # Helpers
 def reduce_noise(audio, sr, cutoff):
@@ -54,39 +31,21 @@ def wav_to_bytes(audio_array, sr):
     virtual_file.seek(0)
     return virtual_file.read()
 
-def get_simulated_diagnosis(audio, sr, valve):
-    energy = np.sum(audio ** 2)
-    if energy > 1000:
-        return SIMULATED_DIAGNOSES[valve]["abnormal"]
-    else:
-        return SIMULATED_DIAGNOSES[valve]["normal"]
+def diagnose_with_gemini_text_from_audio(audio, sr, valve):
+    t = np.linspace(0, len(audio) / sr, len(audio))
+    fig, ax = plt.subplots()
+    ax.plot(t, audio)
+    ax.set(title=f"Waveform – {valve}", xlabel="Time (s)", ylabel="Amplitude")
 
-def diagnose_with_gemini_text_only(text, valve):
-    prompt = f"""
-Analyze the following simulated diagnosis for the {valve} valve and suggest if further clinical evaluation is required:
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
+        plt.savefig(tmp.name)
+        plt.close(fig)
+        image_path = tmp.name
 
-{text}
-    """
+    with open(image_path, "rb") as img_file:
+        image_data = base64.b64encode(img_file.read()).decode()
+
     try:
-        response = model.generate_content(prompt)
-        return response.text.strip()
-    except Exception as e:
-        return f"Gemini error: {e}"
-
-def diagnose_with_waveform_image(audio, sr, valve):
-    try:
-        t = np.linspace(0, len(audio) / sr, len(audio))
-        fig, ax = plt.subplots()
-        ax.plot(t, audio)
-        ax.set(title=f"Waveform – {valve}", xlabel="Time (s)", ylabel="Amplitude")
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
-            plt.savefig(tmp.name)
-            plt.close(fig)
-            image_path = tmp.name
-
-        with open(image_path, "rb") as img_file:
-            image_data = base64.b64encode(img_file.read()).decode()
-
         gemini_response = model.generate_content([
             {
                 "inline_data": {
@@ -95,18 +54,20 @@ def diagnose_with_waveform_image(audio, sr, valve):
                 }
             },
             {
-                "text": f"""{{
-  "valve": "{valve}",
-  "condition": "Your diagnosis",
-  "severity": "Mild/Moderate/Severe",
-  "justification": "Brief explanation of waveform features"
-}}"""
+                "text": f"""
+You are a medical AI trained to diagnose heart valve conditions from waveform images.
+Analyze the waveform image provided for the {valve} valve.
+Return a medical report including:
+- Diagnosis (e.g., normal, stenosis, regurgitation)
+- Severity (mild, moderate, severe)
+- Reasoning based on waveform characteristics
+- Recommendations
+"""
             }
         ])
-
         return gemini_response.text.strip()
     except Exception as e:
-        return f"Gemini image analysis error: {e}"
+        return f"Gemini diagnosis error: {e}"
 
 def show_waveform(audio, sr, label, color='blue'):
     t = np.linspace(0, len(audio) / sr, len(audio))
@@ -119,6 +80,7 @@ def edit_and_show_waveform(path, label):
     sr, audio = wav.read(path)
     if audio.ndim > 1:
         audio = audio[:, 0]
+
     st.markdown(f"#### {label} Valve")
 
     a1, a2, a3 = st.columns(3)
@@ -137,16 +99,8 @@ def edit_and_show_waveform(path, label):
         st.audio(io.BytesIO(wav_to_bytes(filt, sr)))
         show_waveform(filt, sr, f"{label} Edited", color='red')
 
-    sim = get_simulated_diagnosis(filt, sr, label)
-    st.write("##### 🤖 Simulated Report")
-    st.write(sim)
-
-    ai_text = diagnose_with_gemini_text_only(sim, label)
-    st.write("##### 🧠 AI Diagnosis (Text)")
-    st.success(ai_text)
-
-    ai_img = diagnose_with_waveform_image(filt, sr, label)
-    st.write("##### 🧠 AI Diagnosis (Waveform Image)")
+    st.write("##### 🧠 Real-time AI Diagnosis from Waveform")
+    ai_img = diagnose_with_gemini_text_from_audio(filt, sr, label)
     st.success(ai_img)
 
 # UI
