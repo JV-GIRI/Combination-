@@ -45,13 +45,14 @@ def diagnose_with_waveform_image(audio, sr, valve):
         # Load image and send to Gemini
         image = Image.open(image_path)
         gemini_response = model.generate_content([
-            {
-                "inline_data": {
-                    "mime_type": "image/png",
-                    "data": base64.b64encode(open(image_path, "rb").read()).decode()
-                }
-            },
-        ]
+    {
+        "inline_data": {
+            "mime_type": "image/png",
+            "data": base64.b64encode(open(image_path, "rb").read()).decode()
+        }
+    },
+]
+        "text": f"""...
                 "text": f"""{{ 
   "valve": "{valve}",
   "condition": "Your diagnosis",
