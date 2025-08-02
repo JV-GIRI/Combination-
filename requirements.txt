@@ -1,0 +1,10 @@
+streamlit==1.35.0
+pydub
+librosa
+soundfile
+numpy
+matplotlib
+scipy
+google-generativeai
+openai
+uuid
