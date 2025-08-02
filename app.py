@@ -1,113 +1,112 @@
 import streamlit as st
 import numpy as np
+import librosa
 import matplotlib.pyplot as plt
-import os
-import scipy.io.wavfile as wav
-from scipy.signal import butter, lfilter
-from datetime import datetime
-import json
 import io
 import base64
-from twilio.rest import Client
-import google.generativeai as genai
-from PIL import Image
-import tempfile
+import requests
+from scipy.signal import butter, lfilter
+from pydub import AudioSegment
+from tempfile import NamedTemporaryFile
 
-# Configuration
-UPLOAD_FOLDER = "uploaded_audios"
-PATIENT_DATA = "patient_data.json"
-SIMULATED_DIAGNOSES = { ... }  # unchanged
+# ======================== CONFIG ========================
+st.set_page_config(page_title="Real-Time PCG AI Diagnosis", layout="wide")
+st.title("🔬 Real-Time Heart Sound Diagnosis (PCG + Gemini)")
 
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+# ================== HELPER FUNCTIONS ====================
+def butter_bandpass(lowcut, highcut, fs, order=5):
+    nyq = 0.5 * fs
+    low = lowcut / nyq
+    high = highcut / nyq
+    b, a = butter(order, [low, high], btype='band')
+    return b, a
 
-# Gemini Setup
-genai.configure(api_key="AIzaSyDdGv--2i0pMbhH68heurl-LI1qJPJjzD4")
-model = genai.GenerativeModel(model_name="gemini-2.5-flash")
+def bandpass_filter(data, lowcut=25.0, highcut=400.0, fs=1000.0, order=4):
+    b, a = butter_bandpass(lowcut, highcut, fs, order=order)
+    y = lfilter(b, a, data)
+    return y
 
-# Data persistence and Twilio helper: unchanged
+def generate_waveform_plot(y, sr):
+    fig, ax = plt.subplots(figsize=(10, 3))
+    ax.plot(np.linspace(0, len(y)/sr, len(y)), y)
+    ax.set_xlabel("Time (s)")
+    ax.set_ylabel("Amplitude")
+    ax.set_title("Phonocardiogram Waveform")
+    ax.grid(True)
+    buf = io.BytesIO()
+    plt.tight_layout()
+    plt.savefig(buf, format='png')
+    plt.close(fig)
+    buf.seek(0)
+    return base64.b64encode(buf.getvalue()).decode()
 
-# Audio processing helpers: unchanged
+def convert_audio(file):
+    audio = AudioSegment.from_file(file)
+    with NamedTemporaryFile(delete=False, suffix=".wav") as f:
+        audio.export(f.name, format="wav")
+        return f.name
 
-# Generate waveform image and diagnose with Gemini
-def diagnose_with_waveform_image(audio, sr, valve):
-    try:
-        # Plot waveform and save to temp file
-        t = np.linspace(0, len(audio)/sr, len(audio))
-        fig, ax = plt.subplots()
-        ax.plot(t, audio)
-        ax.set(title=f"Waveform – {valve}", xlabel="Time (s)", ylabel="Amplitude")
-
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
-            plt.savefig(tmp.name)
-            plt.close(fig)
-            image_path = tmp.name
-
-        # Load image and send to Gemini
-        with open(image_path, "rb") as img_file:
-            image_data = base64.b64encode(img_file.read()).decode()
-
-        gemini_response = model.generate_content([
-            {
-                "inline_data": {
-                    "mime_type": "image/png",
-                    "data": image_data
+def call_gemini_diagnosis(base64_waveform_img, valve="Mitral"):
+    # Sample Gemini prompt
+    prompt = {
+        "contents": [{
+            "role": "user",
+            "parts": [
+                {
+                    "text": f"This is a phonocardiogram waveform image for the {valve} valve. Analyze the waveform and diagnose the likely heart condition. Return only in structured concise format:\n\n- Valve:\n- Condition:\n- Confidence Score (%):\n- Justification:\n- Recommendation:"
+                },
+                {
+                    "inline_data": {
+                        "mime_type": "image/png",
+                        "data": base64_waveform_img
+                    }
                 }
-            },
-            {
-                "text": f"""{{
-  "valve": "{valve}",
-  "condition": "Your diagnosis",
-  "severity": "Mild/Moderate/Severe",
-  "justification": "Brief explanation of waveform features"
-}}"""
-            }
-        ])
+            ]
+        }]
+    }
 
-        return gemini_response.text.strip()
+    # Replace this with actual Gemini API call
+    headers = {
+        "Authorization": f"Bearer YOUR_GEMINI_API_KEY",
+        "Content-Type": "application/json"
+    }
+    endpoint = "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro-vision:generateContent"
+    response = requests.post(endpoint, headers=headers, json=prompt)
+    result = response.json()
 
-    except Exception as e:
-        return f"Gemini image analysis error: {e}"
+    if 'candidates' in result:
+        return result['candidates'][0]['content']['parts'][0]['text']
+    else:
+        return "Unable to diagnose. Please try again."
 
-# Edit and show waveform + AI integration
-def edit_and_show_waveform(path, label):
-    sr, audio = wav.read(path)
-    if audio.ndim > 1:
-        audio = audio[:, 0]
-    st.markdown(f"#### {label} Valve")
-    a1, a2, a3 = st.columns(3)
-    amp = a1.slider(f"{label} Amplitude", 0.1, 5.0, 1.0, key=f"amp{label}")
-    dur = a2.slider(f"{label} Duration (s)", 1, int(len(audio)/sr), 5, key=f"dur{label}")
-    cutoff = a3.slider(f"{label} Noise Cutoff", 0.01, 0.5, 0.05, 0.01, key=f"noise{label}")
-    adj = audio[:dur*sr]*amp
-    filt = reduce_noise(adj, sr, cutoff)
+# ================== UPLOAD SECTION =====================
+st.subheader("📥 Upload Your Heart Sound (PCG) File")
+uploaded_file = st.file_uploader("Upload WAV/MP3/OGG file", type=["wav", "mp3", "ogg"])
 
-    c1, c2 = st.columns(2)
-    with c1:
-        st.audio(path)
-        show_waveform(audio, sr, f"{label} Original")
-    with c2:
-        st.audio(io.BytesIO(wav_to_bytes(filt, sr)))
-        show_waveform(filt, sr, f"{label} Edited", color='red')
+if uploaded_file:
+    with st.spinner("Processing and diagnosing..."):
+        audio_path = convert_audio(uploaded_file)
+        y, sr = librosa.load(audio_path, sr=1000)
+        y_filtered = bandpass_filter(y, fs=sr)
 
-    sim = get_simulated_diagnosis(filt, sr, label)
-    st.write("##### 🤖 Simulated Report")
-    st.write(sim)
+        # Show waveform
+        img_b64 = generate_waveform_plot(y_filtered, sr)
+        st.image(f"data:image/png;base64,{img_b64}", use_column_width=True)
 
-    ai_text = diagnose_with_gemini_text_only(sim, label)
-    st.write("##### 🧠 AI Diagnosis (Text)")
-    st.success(ai_text)
+        # Diagnosis using Gemini
+        diagnosis = call_gemini_diagnosis(img_b64)
 
-    ai_img = diagnose_with_waveform_image(filt, sr, label)
-    st.write("##### 🧠 AI Diagnosis (Waveform Image)")
-    st.success(ai_img)
+        st.markdown("### 📋 Diagnosis Result")
+        st.code(diagnosis, language='markdown')
 
-# Streamlit UI, sidebar, saving data, SMS, and history: unchanged from your code
+        st.download_button("💾 Download Diagnosis Report", diagnosis, file_name="diagnosis.txt")
 
-# Button styling
+# ================== FOOTER STYLING =====================
 st.markdown("""
-    <style>
-        .main {
-            padding: 20px;
-        }
-    </style>
+<style>
+footer {visibility: hidden;}
+section.main > div:has(~ footer) {
+    padding-bottom: 0rem;
+}
+</style>
 """, unsafe_allow_html=True)
